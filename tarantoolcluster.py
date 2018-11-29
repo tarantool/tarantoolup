@@ -6,6 +6,9 @@ import configparser
 import os
 import sys
 import fcntl
+import time
+import re
+import math
 
 config_defaults = {
     'run_dir': './run',
@@ -13,6 +16,70 @@ config_defaults = {
     'log_dir': './log',
     'app_dir': './app'
 }
+
+
+def get_process_name(pid):
+    pid = int(pid)
+    proc = subprocess.Popen(['ps', '-ax', '-eo', 'pid,comm'],
+                            stdout=subprocess.PIPE)
+    proc.wait()
+    results = proc.stdout.readlines()
+
+    etime = None
+    for result in results:
+        try:
+            result.strip()
+            parts = re.findall(r'\S+', result.decode('utf-8'))
+            if int(parts[0]) == pid:
+                return parts[1]
+        except Exception:
+            pass # ignore parsing errors
+    else:
+        # didn't find one
+        print("Process PID", pid, "doesn't seem to exist!")
+        sys.exit(0)
+
+
+
+def get_start_time(pid):
+    pid = int(pid)
+    proc = subprocess.Popen(['ps', '-ax', '-eo', 'pid,etime'],
+                            stdout=subprocess.PIPE)
+    proc.wait()
+    results = proc.stdout.readlines()
+
+    etime = None
+    for result in results:
+        try:
+            result.strip()
+            parts = re.findall(r'\S+', result.decode('utf-8'))
+            if int(parts[0]) == pid:
+                etime = parts[1]
+                break
+        except Exception:
+            pass # ignore parsing errors
+    else:
+        # didn't find one
+        print("Process PID", pid, "doesn't seem to exist!")
+        sys.exit(0)
+
+    if etime is None:
+        return None
+
+    days = 0
+    rest = etime
+
+    if '-' in etime:
+        days, _, rest = etime.partition('-')
+        days = int(days)
+
+    rest = [int(part) for part in rest.split(':')]
+    rest = (3-len(rest)) * [0] + rest
+
+    hours, minutes, seconds = rest
+
+    since_start = days*24*3600 + hours*3600 + minutes*60 + seconds
+    return time.time() - since_start
 
 
 def which(file_name):
@@ -72,14 +139,47 @@ def start_single_instance(config, instance_name):
 
 
 def get_pid(pidfile):
+    if not os.path.exists(pidfile):
+        return None
+
     pid = None
     with open(pidfile, 'r') as f:
         pid = int(f.read().strip())
 
-    # check that we can access this pid
-    os.kill(pid, 0)
+    try:
+        os.kill(pid, 0)
+    except Exception:
+        return None
 
     return pid
+
+
+# Detecting stale pids is important if our process has crashed and
+# didn't clean up pid files after itself. Then another process could
+# have taken the same pid and we shouldn't be fooled that it's
+# tarantool.
+def is_pidfile_stale(pidfile):
+    pid = get_pid(pidfile)
+
+    if pid is None:
+        return True
+
+    process_etime = get_start_time(pid)
+
+    if process_etime is None:
+        return True
+
+    pid_mtime = os.path.getmtime(pidfile)
+
+    if math.ceil(pid_mtime) < math.floor(process_etime):
+        return True
+
+    process_name = get_process_name(pid)
+
+    if "tarantool" not in process_name:
+        return True
+
+    return False
 
 
 def stop_instance(config, instance_name):
@@ -89,8 +189,17 @@ def stop_instance(config, instance_name):
         sys.exit(1)
 
     pid_file = os.path.join(run_dir, instance_name + '.pid')
+    pid_file = os.path.realpath(pid_file)
+
+    if os.path.exists(pid_file) and is_pidfile_stale(pid_file):
+        print("Removing stale pid file: %s" % pid_file)
+        os.remove(pid_file)
+        return
 
     pid = get_pid(pid_file)
+
+    if pid is None:
+        return
 
     print("Stopping %s" % instance_name)
     os.kill(pid, 15)
@@ -98,7 +207,6 @@ def stop_instance(config, instance_name):
 
 
 def start_instance(config, instance_name):
-    print("Starting: ", instance_name)
     work_dir = config_get_value(config, instance_name, 'work_dir')
     app_work_dir = os.path.join(work_dir, instance_name)
     run_dir = config_get_value(config, instance_name, 'run_dir')
@@ -129,8 +237,8 @@ def start_instance(config, instance_name):
         print("Unable to find log dir: %s" % log_dir)
         sys.exit(1)
 
-
     log_file = os.path.join(log_dir, instance_name + '.log')
+    log_file = os.path.realpath(log_file)
 
     tarantool = os.path.join(app_dir, 'tarantool')
 
@@ -154,17 +262,29 @@ def start_instance(config, instance_name):
     pid_file = os.path.join(run_dir, instance_name + '.pid')
     pid_file = os.path.realpath(pid_file)
 
+    control_file = os.path.join(run_dir, instance_name + '.control')
+    control_file = os.path.realpath(control_file)
+
+    if os.path.exists(pid_file) and is_pidfile_stale(pid_file):
+        print("Removing stale pid file: %s" % pid_file)
+        os.remove(pid_file)
+
+    pid = get_pid(pid_file)
+
+    if pid is not None:
+        print("Already running: %s" % instance_name)
+        return
+
     instance_config = config_merge(config, instance_name)
     env = config_to_env(instance_config)
     env['TARANTOOL_PID_FILE'] = pid_file
+    env['TARANTOOL_INSTANCE_NAME'] = instance_name
+    env['TARANTOOL_CONTROL_FILE'] = control_file
+    env['TARANTOOL_LOG_FILE'] = log_file
 
     args = [tarantool, init]
 
-    print("work_dir: ", work_dir)
-    print("pid_file: ", pid_file)
-    print("tarantool: ", tarantool)
-    print("args: ", args)
-    print("env: ", env)
+    print("Starting: ", instance_name)
 
     # Fork, creating a new process for the child.
     try:
@@ -182,16 +302,11 @@ def start_instance(config, instance_name):
     if process_id == -1:
         sys.exit(1)
 
-    log_file_f = open(log_file, 'a')
-
-    print("starting tarantool")
-
     devnull_fd = os.open(os.devnull, os.O_RDWR)
     os.dup2(devnull_fd, 0)
-    os.dup2(log_file_f.fileno(), 1)
-    os.dup2(log_file_f.fileno(), 2)
+    os.dup2(devnull_fd, 1)
+    os.dup2(devnull_fd, 2)
     os.close(devnull_fd)
-    log_file_f.close()
 
     os.chdir(app_work_dir)
     try:
