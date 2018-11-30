@@ -1,20 +1,18 @@
-#!/usr/bin/env python3
+#!/usr/bin/env python
+
+from __future__ import print_function
 
 import subprocess
 import argparse
 import configparser
 import os
 import sys
-import fcntl
 import time
 import re
 import math
 
+
 config_defaults = {
-    'run_dir': './run',
-    'work_dir': './data',
-    'log_dir': './log',
-    'app_dir': './app'
 }
 
 
@@ -25,7 +23,6 @@ def get_process_name(pid):
     proc.wait()
     results = proc.stdout.readlines()
 
-    etime = None
     for result in results:
         try:
             result.strip()
@@ -34,11 +31,8 @@ def get_process_name(pid):
                 return parts[1]
         except Exception:
             pass # ignore parsing errors
-    else:
-        # didn't find one
-        print("Process PID", pid, "doesn't seem to exist!")
-        sys.exit(0)
 
+    return None
 
 
 def get_start_time(pid):
@@ -58,10 +52,6 @@ def get_start_time(pid):
                 break
         except Exception:
             pass # ignore parsing errors
-    else:
-        # didn't find one
-        print("Process PID", pid, "doesn't seem to exist!")
-        sys.exit(0)
 
     if etime is None:
         return None
@@ -182,11 +172,79 @@ def is_pidfile_stale(pidfile):
     return False
 
 
-def stop_instance(config, instance_name):
+def find_app_dir(config, instance_name):
+    app, instance = instance_split(instance_name)
+    app_dir = config_get_value(config, instance_name, 'app_dir')
+
+    if app_dir is not None:
+        return os.path.join(app_dir, app)
+
+    init_lua = os.path.join(os.getcwd(), 'init.lua')
+    rockspec = os.path.join(os.getcwd(), '%s-scm-1.rockspec' % app)
+
+    if os.path.exists(init_lua) and os.path.exists(rockspec):
+        return os.path.realpath(os.getcwd())
+
+    return os.path.realpath(os.path.join(os.getcwd(), app))
+
+
+def get_dirs(config, instance_name):
+    data_dir = config_get_value(config, instance_name, 'data_dir')
     run_dir = config_get_value(config, instance_name, 'run_dir')
+    log_dir = config_get_value(config, instance_name, 'log_dir')
+    app_dir = find_app_dir(config, instance_name)
+
+    if run_dir is None or log_dir is None or data_dir is None:
+        work_dir = config_get_value(config, instance_name, 'work_dir')
+        if work_dir is None:
+            work_dir = os.path.join(os.getcwd(), 'tarantooldata')
+
+        work_dir = os.path.realpath(work_dir)
+        if not os.path.exists(work_dir):
+            os.mkdir(work_dir)
+
+    if run_dir is None:
+        run_dir = os.path.join(work_dir, 'run')
+        if not os.path.exists(run_dir):
+            os.mkdir(run_dir)
+
+    if data_dir is None:
+        data_dir = os.path.join(work_dir, 'data')
+        if not os.path.exists(data_dir):
+            os.mkdir(data_dir)
+
+    if log_dir is None:
+        log_dir = os.path.join(work_dir, 'log')
+        if not os.path.exists(log_dir):
+            os.mkdir(log_dir)
+
     if not os.path.exists(run_dir):
         print("Unable to find run dir: %s" % run_dir)
         sys.exit(1)
+
+    if not os.path.exists(data_dir):
+        print("Unable to find data dir: %s" % data_dir)
+        sys.exit(1)
+
+    if not os.path.exists(log_dir):
+        print("Unable to find log dir: %s" % log_dir)
+        sys.exit(1)
+
+    if not os.path.exists(app_dir):
+        print("Unable to find app dir: %s" % app_dir)
+        sys.exit(1)
+
+    app_data_dir = os.path.join(data_dir, instance_name)
+
+    if not os.path.exists(app_data_dir):
+        os.mkdir(app_data_dir)
+
+    return app_dir, log_dir, run_dir, app_data_dir
+
+
+
+def stop_instance(config, instance_name):
+    app_dir, log_dir, run_dir, data_dir = get_dirs(config, instance_name)
 
     pid_file = os.path.join(run_dir, instance_name + '.pid')
     pid_file = os.path.realpath(pid_file)
@@ -207,35 +265,11 @@ def stop_instance(config, instance_name):
 
 
 def start_instance(config, instance_name):
-    work_dir = config_get_value(config, instance_name, 'work_dir')
-    app_work_dir = os.path.join(work_dir, instance_name)
-    run_dir = config_get_value(config, instance_name, 'run_dir')
-    app_dir = config_get_value(config, instance_name, 'app_dir')
-    log_dir = config_get_value(config, instance_name, 'log_dir')
+    app_dir, log_dir, run_dir, data_dir = get_dirs(config, instance_name)
 
     app, instance = instance_split(instance_name)
 
-    app_dir = os.path.join(app_dir, app)
-
-
-    if not os.path.exists(work_dir):
-        print("Unable to find work dir: %s" % work_dir)
-        sys.exit(1)
-
-    if not os.path.exists(app_work_dir):
-        os.mkdir(app_work_dir)
-
-    if not os.path.exists(app_dir):
-        print("Unable to find app dir: %s" % app_dir)
-        sys.exit(1)
-
-    if not os.path.exists(run_dir):
-        print("Unable to find run dir: %s" % run_dir)
-        sys.exit(1)
-
-    if not os.path.exists(log_dir):
-        print("Unable to find log dir: %s" % log_dir)
-        sys.exit(1)
+    app_dir = find_app_dir(config, instance_name)
 
     log_file = os.path.join(log_dir, instance_name + '.log')
     log_file = os.path.realpath(log_file)
@@ -279,7 +313,7 @@ def start_instance(config, instance_name):
     env = config_to_env(instance_config)
     env['TARANTOOL_PID_FILE'] = pid_file
     env['TARANTOOL_INSTANCE_NAME'] = instance_name
-    env['TARANTOOL_CONTROL_FILE'] = control_file
+    env['TARANTOOL_CONSOLE_SOCK'] = control_file
     env['TARANTOOL_LOG_FILE'] = log_file
 
     args = [tarantool, init]
@@ -308,7 +342,7 @@ def start_instance(config, instance_name):
     os.dup2(devnull_fd, 2)
     os.close(devnull_fd)
 
-    os.chdir(app_work_dir)
+    os.chdir(data_dir)
     try:
         os.execve(tarantool, args, env)
     except Exception as ex:
@@ -366,7 +400,7 @@ def attach(instance_name):
     pass
 
 
-def read_config(filename='cluster.cfg'):
+def read_config(filename='tarantool.ini'):
     if not os.path.exists(filename):
         Exception("Cluster config file doesn't exist: '%s'" % filename)
 
@@ -383,11 +417,29 @@ def read_config(filename='cluster.cfg'):
     return cfg
 
 
+def find_config_file():
+    home = os.path.expanduser('~')
+
+    candidates = ['tarantool.ini',
+                  '.tarantool.ini',
+                  os.path.join(home, '.config/tarantool/tarantool.ini'),
+                  '/etc/tarantool/tarantool.ini']
+
+    for candidate in candidates:
+        if os.path.exists(candidate):
+            return candidate
+
+    return 'tarantool.ini'
+
+
+
 def main():
     parser = argparse.ArgumentParser()
 
+    config = find_config_file()
+
     parser.add_argument('-c', '--config',
-        help="Configuration file", default='cluster.cfg')
+                        help="Configuration file", default=config)
 
     subparsers = parser.add_subparsers(dest='command')
     subparsers.required = True
@@ -403,6 +455,9 @@ def main():
                              default='', nargs='?')
 
     args = parser.parse_args()
+
+    if not os.path.exists(args.config):
+        print("Can't find config file: %s" % args.config)
 
     cfg = read_config(args.config)
 
