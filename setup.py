@@ -3,7 +3,7 @@ from distutils.core import setup
 setup(
     name='tarantoolup',
     packages=[''],
-    version='0.1.0',
+    version='0.1.1',
     description='Tarantool instance manager',
     author='Konstantin Nazarov',
     author_email='mail@knazarov.com',
