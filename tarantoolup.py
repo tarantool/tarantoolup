@@ -144,6 +144,11 @@ def get_pid(pidfile):
     return pid
 
 
+def write_pid(pidfile, pid):
+    with open(pidfile, 'w') as f:
+        f.write(str(pid))
+
+
 # Detecting stale pids is important if our process has crashed and
 # didn't clean up pid files after itself. Then another process could
 # have taken the same pid and we shouldn't be fooled that it's
@@ -330,6 +335,11 @@ def start_instance(config, instance_name):
     if process_id != 0:
         return
     # This is the child process. Continue.
+
+    # needed in case if tarantool itself doesn't write a pid file
+    # for instance, when box.cfg{} hasn't been called yet
+    pid = os.getpid()
+    write_pid(pid_file, pid)
 
     # detach from terminal
     process_id = os.setsid()
