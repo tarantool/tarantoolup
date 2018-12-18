@@ -10,5 +10,8 @@ setup(
     url='https://github.com/tarantool/tarantoolup',
     keywords=['tarantool'],
     classifiers=[],
-    scripts=['tarantoolup']
+    scripts=['tarantoolup'],
+    install_requires=[
+        'configparser',
+    ],
 )
