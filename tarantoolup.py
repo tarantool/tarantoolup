@@ -4,7 +4,12 @@ from __future__ import print_function
 
 import subprocess
 import argparse
-import configparser
+
+try:
+    import ConfigParser as configparser
+except:
+    import configparser
+
 import os
 import sys
 import time
@@ -421,8 +426,8 @@ def read_config(filename='tarantool.ini'):
 
     for section in parser.sections():
         cfg[section] = {}
-        for key in parser[section]:
-            cfg[section][key] = parser[section][key].strip()
+        for key in parser.options(section):
+            cfg[section][key] = parser.get(section, key).strip()
 
     return cfg
 
