@@ -4,7 +4,12 @@ from __future__ import print_function
 
 import subprocess
 import argparse
-import configparser
+
+try:
+    import ConfigParser as configparser
+except:
+    import configparser
+
 import os
 import sys
 import time
@@ -142,6 +147,11 @@ def get_pid(pidfile):
         return None
 
     return pid
+
+
+def write_pid(pidfile, pid):
+    with open(pidfile, 'w') as f:
+        f.write(str(pid))
 
 
 # Detecting stale pids is important if our process has crashed and
@@ -331,6 +341,11 @@ def start_instance(config, instance_name):
         return
     # This is the child process. Continue.
 
+    # needed in case if tarantool itself doesn't write a pid file
+    # for instance, when box.cfg{} hasn't been called yet
+    pid = os.getpid()
+    write_pid(pid_file, pid)
+
     # detach from terminal
     process_id = os.setsid()
     if process_id == -1:
@@ -411,8 +426,8 @@ def read_config(filename='tarantool.ini'):
 
     for section in parser.sections():
         cfg[section] = {}
-        for key in parser[section]:
-            cfg[section][key] = parser[section][key].strip()
+        for key in parser.options(section):
+            cfg[section][key] = parser.get(section, key).strip()
 
     return cfg
 
