@@ -11,7 +11,4 @@ setup(
     keywords=['tarantool'],
     classifiers=[],
     scripts=['tarantoolup'],
-    install_requires=[
-        'configparser',
-    ],
 )
