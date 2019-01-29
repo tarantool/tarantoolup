@@ -274,7 +274,7 @@ def stop_instance(config, instance_name):
 
 
 
-def start_instance(config, instance_name):
+def start_instance(config, instance_name, verbose):
     app_dir, log_dir, run_dir, data_dir = get_dirs(config, instance_name)
 
     app, instance = instance_split(instance_name)
@@ -321,10 +321,12 @@ def start_instance(config, instance_name):
 
     instance_config = config_merge(config, instance_name)
     env = config_to_env(instance_config)
+    env = dict(os.environ.copy(), **env)
     env['TARANTOOL_PID_FILE'] = pid_file
     env['TARANTOOL_INSTANCE_NAME'] = instance_name
     env['TARANTOOL_CONSOLE_SOCK'] = control_file
     env['TARANTOOL_LOG_FILE'] = log_file
+    env['TARANTOOL_WORK_DIR'] = data_dir
 
     args = [tarantool, init]
 
@@ -351,11 +353,12 @@ def start_instance(config, instance_name):
     if process_id == -1:
         sys.exit(1)
 
-    devnull_fd = os.open(os.devnull, os.O_RDWR)
-    os.dup2(devnull_fd, 0)
-    os.dup2(devnull_fd, 1)
-    os.dup2(devnull_fd, 2)
-    os.close(devnull_fd)
+    if not verbose:
+        devnull_fd = os.open(os.devnull, os.O_RDWR)
+        os.dup2(devnull_fd, 0)
+        os.dup2(devnull_fd, 1)
+        os.dup2(devnull_fd, 2)
+        os.close(devnull_fd)
 
     os.chdir(data_dir)
     try:
@@ -453,8 +456,8 @@ def main():
 
     config = find_config_file()
 
-    parser.add_argument('-c', '--config',
-                        help="Configuration file", default=config)
+    parser.add_argument('-c', '--config', help="Configuration file", default=config)
+    parser.add_argument('-v', '--verbose', help="Ignore output", default=False)
 
     subparsers = parser.add_subparsers(dest='command')
     subparsers.required = True
@@ -477,7 +480,7 @@ def main():
     cfg = read_config(args.config)
 
     if args.command == 'start':
-        start(cfg, args.instance_name)
+        start(cfg, args.instance_name, args.verbose)
     elif args.command == 'stop':
         stop(cfg, args.instance_name)
 
