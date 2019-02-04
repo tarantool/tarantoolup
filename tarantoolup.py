@@ -390,11 +390,11 @@ def get_instances(config, instance_name):
     return result
 
 
-def start(config, instance_name):
+def start(config, instance_name, verbose):
     app, instance = instance_split(instance_name)
 
     if instance and instance_name in config:
-        start_instance(config, instance_name)
+        start_instance(config, instance_name, verbose)
     else:
         for key in config:
             if key != 'default':
@@ -403,9 +403,9 @@ def start(config, instance_name):
                 if candidate_instance != '':
                     if instance != '':
                         if key == instance_name:
-                            start_instance(config, key)
+                            start_instance(config, key, verbose)
                     elif app == '' or candidate_app == app:
-                        start_instance(config, key)
+                        start_instance(config, key, verbose)
 
 
 def stop(config, instance_name):
